@@ -1,37 +1,7 @@
-# ============================================================
-# Business Analytics Platform — Requirements
-# Python >= 3.9
-# ============================================================
-
-# ── Core framework ──────────────────────────────────────────
 streamlit>=1.32.0
-
-# ── Data processing ─────────────────────────────────────────
 pandas>=2.0.0
 numpy>=1.24.0
-openpyxl>=3.1.0          # Excel .xlsx read/write
-xlrd>=2.0.1              # Excel .xls read
-
-# ── Visualisation ───────────────────────────────────────────
 plotly>=5.18.0
-kaleido>=0.2.1           # Static image export for Plotly
-
-# ── Forecasting ─────────────────────────────────────────────
-prophet>=1.1.4           # Primary forecasting model
-# Dependency of Prophet (usually auto-installed):
-pystan>=3.7.0
-holidays>=0.45           # Ukrainian & other country holidays
-
-# ── ML / Fallback forecasting ───────────────────────────────
-scikit-learn>=1.3.0      # GradientBoostingRegressor fallback
-xgboost>=2.0.0           # Optional XGBoost time-series
-
-# ── AI Integration ──────────────────────────────────────────
-google-generativeai>=0.5.0   # Google Gemini (AI Director + Growth Plan)
-
-# ── Utilities ───────────────────────────────────────────────
-python-dateutil>=2.8.2
-pytz>=2024.1
-
-# ── Optional: NeuralProphet (heavy, install separately if needed) ──
-# neuralprophet>=0.9.0
+openpyxl>=3.1.0
+prophet>=1.1.4
+google-generativeai>=0.5.0
