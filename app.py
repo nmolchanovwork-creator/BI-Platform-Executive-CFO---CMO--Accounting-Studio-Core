@@ -1,6 +1,6 @@
 """
 BI Platform: Executive CFO & CMO / Accounting Studio Core
-Production-ready Streamlit App
+(Integrated with advanced Nomenclature Parsing)
 """
 
 import streamlit as st
@@ -10,7 +10,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from prophet import Prophet
 import google.generativeai as genai
-from datetime import timedelta
 import warnings
 import json
 
@@ -19,78 +18,142 @@ warnings.filterwarnings('ignore')
 # --- CONFIG ---
 st.set_page_config(page_title="Executive BI Platform", page_icon="📊", layout="wide")
 
-# --- UTILS & DATA CLEANING ---
+# --- CORE DATA PROCESSING WITH BUNDLE LOGIC ---
 @st.cache_data
 def load_and_clean_data(file):
     try:
+        # 1. Чтение файла (поддержка и CSV, и XLSX)
         if file.name.endswith('.csv'):
-            df = pd.read_csv(file, low_memory=False)
+            df = pd.read_csv(file, dtype=str, low_memory=False)
         else:
-            df = pd.read_excel(file)
+            df = pd.read_excel(file, dtype=str)
             
-        # Универсальный маппинг колонок (поддержка RU/UA/EN)
-        col_mapping = {
-            'дата заказа': 'date', 'дата': 'date', 'date': 'date',
-            'статус': 'status', 'статус заказа': 'status',
-            'номер заказа': 'order_id', 'id': 'order_id',
-            'клиент': 'client', 'фио': 'client', 'email': 'client',
-            'город': 'city', 'місто': 'city',
-            'регион': 'region', 'область': 'region',
-            'страна доставки': 'country', 'країна': 'country',
-            'название товара': 'product', 'товар': 'product',
-            'категория': 'category', 
-            'количество': 'qty', 'кількість': 'qty',
-            'итого': 'revenue', 'сумма': 'revenue', 'стоимость': 'revenue',
-            'себестоимость': 'cogs', 'цена': 'price',
-            'utm_source': 'utm_source', 'utm_medium': 'utm_medium', 'utm_campaign': 'utm_campaign'
-        }
+        # 2. Подготовка базовых числовых колонок перед сложной логикой
+        num_cols = ['Цена', 'Количество', 'Стоимость', 'Итого']
+        for col in num_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+        def is_razom(name):
+            return 'Разом дешевше' in str(name)
+
+        results = []
         
-        df.columns = [str(c).lower().strip() for c in df.columns]
-        df = df.rename(columns=col_mapping)
+        # 3. Твоя сложная логика парсинга номенклатуры (С сохранением метаданных для BI!)
+        for order_num, group in df.groupby('Номер заказа', sort=False):
+            rows = group.reset_index(drop=True)
+            n = len(rows)
+            itogo = rows['Итого'].iloc[0] if 'Итого' in rows.columns else 0
+            
+            # Сохраняем метаданные всего заказа для аналитики
+            r0 = rows.iloc[0]
+            meta = {
+                'order_id': order_num,
+                'date': r0.get('Дата заказа'),
+                'status': str(r0.get('Статус', 'Доставлен')).strip(),
+                'city': str(r0.get('Город', 'Не указан')).strip(),
+                'utm_source': str(r0.get('utm_source', 'organic')).replace('nan', 'organic').replace('(none)', 'direct'),
+                'utm_medium': str(r0.get('utm_medium', 'organic')).replace('nan', 'organic').replace('(none)', 'direct'),
+                'utm_campaign': str(r0.get('utm_campaign', 'organic')).replace('nan', 'organic').replace('(none)', 'direct')
+            }
+
+            included = []
+            skip_until = -1
+            i = 0
+
+            while i < n:
+                if i <= skip_until:
+                    i += 1
+                    continue
+
+                row = rows.iloc[i]
+                name = str(row.get('Название товара', ''))
+                art  = str(row.get('Артикул', ''))
+
+                if is_razom(name):
+                    i += 1
+                    continue
+
+                if ('Набір' in name or 'Набор' in name) and not art.startswith('48'):
+                    bundle_price = row['Стоимость']
+                    j = i + 1
+                    cumsum = 0
+                    has_zero = False
+                    candidate_subitems = []
+
+                    while j < n:
+                        r = rows.iloc[j]
+                        r_name = str(r.get('Название товара', ''))
+                        r_art  = str(r.get('Артикул', ''))
+                        if is_razom(r_name): break
+                        if ('Набір' in r_name or 'Набор' in r_name) and not r_art.startswith('48'): break
+
+                        candidate_subitems.append(j)
+                        if r['Цена'] == 0:
+                            has_zero = True
+                            j += 1
+                            break
+                        cumsum += r['Цена'] * r['Количество']
+                        if cumsum >= bundle_price:
+                            j += 1
+                            break
+                        j += 1
+
+                    has_subitems = (len(candidate_subitems) > 0 and (cumsum >= bundle_price or has_zero))
+
+                    if has_subitems:
+                        for si in candidate_subitems:
+                            si_row = rows.iloc[si]
+                            if si_row['Цена'] == 0:
+                                raw_cost = bundle_price / len(candidate_subitems)
+                            else:
+                                raw_cost = si_row['Стоимость']
+                            included.append((si, raw_cost, str(si_row.get('Артикул','')), str(si_row.get('Название товара','')), si_row['Количество'], si_row['Цена']))
+                        skip_until = candidate_subitems[-1]
+                        i = skip_until + 1
+                    else:
+                        included.append((i, row['Стоимость'], art, name, row['Количество'], row['Цена']))
+                        i += 1
+                    continue
+
+                included.append((i, row['Стоимость'], art, name, row['Количество'], row['Цена']))
+                i += 1
+
+            # Пропорциональное распределение скидки заказа
+            raw_sum = sum(x[1] for x in included)
+            scale   = (itogo / raw_sum) if raw_sum else 0
+
+            # Сборка финального чистого массива для BI
+            for item in included:
+                idx, raw_cost, item_art, item_name, qty, price = item
+                net_cost = round(raw_cost * scale, 2)
+                
+                results.append({
+                    **meta,
+                    'art': item_art,
+                    'product': item_name,
+                    'qty': qty,
+                    'revenue': net_cost  # <-- Это наша истинная чистая выручка
+                })
+
+        # 4. Превращаем результат в DataFrame и безопасно парсим даты
+        df_clean = pd.DataFrame(results)
         
-        # Проверка критических колонок
-        if 'date' not in df.columns or 'revenue' not in df.columns:
-            st.error("❌ Ошибка: В файле отсутствуют обязательные колонки (Дата, Итого/Сумма).")
+        if df_clean.empty:
+            st.error("Файл не содержит валидных данных или строк.")
             return pd.DataFrame()
-
-        # Очистка дат
-        df['date'] = pd.to_datetime(df['date'], errors='coerce')
-        df = df.dropna(subset=['date'])
-        
-        # Очистка финансов (удаление нулей и возвратов)
-        df['revenue'] = pd.to_numeric(df['revenue'], errors='coerce').fillna(0)
-        df = df[df['revenue'] > 0]
-        
-        if 'qty' in df.columns:
-            df['qty'] = pd.to_numeric(df['qty'], errors='coerce').fillna(1)
-        else:
-            df['qty'] = 1
             
-        # Заглушка для прибыли, если нет себестоимости (считаем маржу 30% по умолчанию)
-        if 'cogs' not in df.columns:
-            df['profit'] = df['revenue'] * 0.30
-        else:
-            df['cogs'] = pd.to_numeric(df['cogs'], errors='coerce').fillna(0)
-            df['profit'] = df['revenue'] - df['cogs']
+        # Надежный парсинг дат (исключающий ошибку 'must be 1-d array')
+        df_clean['date'] = pd.to_datetime(df_clean['date'], errors='coerce')
+        df_clean = df_clean.dropna(subset=['date'])
+        
+        # Добавляем заглушку для прибыли (например, маржинальность 35%)
+        df_clean['profit'] = df_clean['revenue'] * 0.35
 
-        # Очистка UTM
-        for utm in ['utm_source', 'utm_medium', 'utm_campaign']:
-            if utm not in df.columns:
-                df[utm] = 'organic'
-            df[utm] = df[utm].fillna('organic').replace({'(none)': 'direct', 'NaN': 'organic', '': 'organic'})
-
-        # Заполнение пустых городов
-        if 'city' in df.columns:
-            df['city'] = df['city'].fillna('Не указан')
-        else:
-            df['city'] = 'Не указан'
-            
-        if 'status' not in df.columns:
-            df['status'] = 'Доставлен'
-
-        return df
+        return df_clean
+        
     except Exception as e:
-        st.error(f"❌ Ошибка при чтении файла: {str(e)}")
+        st.error(f"❌ Ошибка при профилировании: {str(e)}")
         return pd.DataFrame()
 
 # --- PROPHET FORECASTING ---
@@ -100,68 +163,69 @@ def generate_forecast(df, periods, freq='D'):
     daily_rev.columns = ['ds', 'y']
     
     m = Prophet(yearly_seasonality=True, weekly_seasonality=True, daily_seasonality=False)
-    m.add_country_holidays(country_name='UA') # Праздники Украины
+    m.add_country_holidays(country_name='UA') # Учет праздников
     m.fit(daily_rev)
     
     future = m.make_future_dataframe(periods=periods, freq=freq)
     forecast = m.predict(future)
     return m, forecast, daily_rev
 
-# --- SIDEBAR & FILTERS ---
+# --- UI & SIDEBAR ---
 st.sidebar.title("Настройки аналитики")
 st.sidebar.markdown("### 🔑 ИИ Директор (Gemini API)")
 api_key = st.sidebar.text_input("Введи Google API Key", type="password")
 with st.sidebar.expander("ℹ️ Как получить API ключ?"):
-    st.markdown("""
-    1. Перейди на [Google AI Studio](https://aistudio.google.com/app/apikey)
-    2. Нажми **Create API Key**
-    3. Скопируй ключ (это бесплатно).
-    """)
+    st.markdown("1. Перейди на [Google AI Studio](https://aistudio.google.com/app/apikey)\n2. Нажми **Create API Key**\n3. Скопируй ключ.")
 
-uploaded_file = st.sidebar.file_uploader("📂 Загрузить реестр (Excel/CSV)", type=['csv', 'xlsx'])
+uploaded_file = st.sidebar.file_uploader("📂 Загрузить файл выгрузки", type=['csv', 'xlsx'])
 
 if uploaded_file:
-    with st.spinner("Очистка и профилирование данных..."):
+    with st.spinner("Профилирование номенклатуры и очистка..."):
         raw_df = load_and_clean_data(uploaded_file)
         
     if not raw_df.empty:
         st.sidebar.markdown("### 🎯 Фильтры")
-        
         # Фильтры
-        status_filter = st.sidebar.multiselect("Статус заказа", raw_df['status'].unique(), default=raw_df['status'].unique())
-        source_filter = st.sidebar.multiselect("Канал трафика", raw_df['utm_source'].unique())
+        all_statuses = raw_df['status'].unique().tolist()
+        status_filter = st.sidebar.multiselect("Статус заказа", all_statuses, default=all_statuses)
         
         df = raw_df[raw_df['status'].isin(status_filter)]
-        if source_filter:
-            df = df[df['utm_source'].isin(source_filter)]
-            
+        
         # UI TABS
         tabs = st.tabs([
-            "📊 Dashboard", "💰 Финансы", "🔮 Прогноз продаж", 
-            "🎛 Финансовое моделирование", "📣 Маркетинг", 
+            "📊 Dashboard", "💰 Продукты", "🔮 Прогноз продаж", 
+            "🎛 Моделирование", "📣 Маркетинг", 
             "🗺️ Геоаналитика", "🧠 AI Директор", "🚀 AI План роста"
         ])
 
-        # --- 1. DASHBOARD & FINANCE ---
+        # --- 1. DASHBOARD ---
         with tabs[0]:
             st.title("Executive Dashboard")
             total_rev = df['revenue'].sum()
             total_profit = df['profit'].sum()
-            orders = len(df)
-            aov = total_rev / orders if orders > 0 else 0
+            unique_orders = df['order_id'].nunique()
+            aov = total_rev / unique_orders if unique_orders > 0 else 0
             
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("💰 Выручка", f"{total_rev:,.0f} ₴")
-            c2.metric("📈 Валовая прибыль", f"{total_profit:,.0f} ₴", f"{(total_profit/total_rev)*100:.1f}% маржа")
-            c3.metric("🛒 Заказов", f"{orders:,}")
+            c1.metric("💰 Чистая Выручка", f"{total_rev:,.0f} ₴")
+            c2.metric("📈 Валовая прибыль", f"{total_profit:,.0f} ₴", "35% маржа (расч.)")
+            c3.metric("🛒 Заказов", f"{unique_orders:,}")
             c4.metric("🧾 Средний чек", f"{aov:,.0f} ₴")
             
             st.markdown("### Динамика выручки")
-            fig_trend = px.line(df.groupby(df['date'].dt.to_period('W').dt.start_time)['revenue'].sum().reset_index(), 
+            fig_trend = px.bar(df.groupby(df['date'].dt.to_period('W').dt.start_time)['revenue'].sum().reset_index(), 
                                 x='date', y='revenue', template="plotly_white")
             st.plotly_chart(fig_trend, use_container_width=True)
 
-        # --- 2. FORECASTING ---
+        # --- 2. PRODUCT PERFORMANCE ---
+        with tabs[1]:
+            st.title("Товарная аналитика (С учетом наборов)")
+            prod_df = df.groupby(['art', 'product']).agg({'qty':'sum', 'revenue':'sum'}).reset_index()
+            prod_df = prod_df.sort_values(by='revenue', ascending=False)
+            
+            st.dataframe(prod_df.head(50).style.format({"revenue": "{:,.2f} ₴"}), use_container_width=True)
+
+        # --- 3. FORECASTING ---
         with tabs[2]:
             st.title("Продвинутое прогнозирование (Prophet)")
             horizon_months = st.slider("Горизонт прогноза (месяцев)", 1, 12, 3)
@@ -178,26 +242,20 @@ if uploaded_file:
                     
                     fig.update_layout(title=f"Прогноз выручки на {horizon_months} мес.", template="plotly_white")
                     st.plotly_chart(fig, use_container_width=True)
-                    
-                    future_rev = forecast.tail(horizon_months * 30)['yhat'].sum()
-                    st.success(f"Ожидаемая выручка за выбранный период: **{future_rev:,.0f} ₴**")
 
-        # --- 3. WHAT-IF MODELING ---
+        # --- 4. WHAT-IF MODELING ---
         with tabs[3]:
             st.title("Что-если (Анализ чувствительности)")
             c1, c2 = st.columns(2)
-            budg_boost = c1.slider("Увеличение трафика/бюджета (%)", 0, 100, 15)
+            budg_boost = c1.slider("Рост объема заказов (%)", 0, 100, 15)
             aov_boost = c2.slider("Рост среднего чека (%)", 0, 100, 10)
             
             proj_rev = total_rev * (1 + budg_boost/100) * (1 + aov_boost/100)
-            proj_profit = total_profit * (1 + budg_boost/100) * (1 + aov_boost/100)
-            
-            c3, c4, c5 = st.columns(3)
+            c3, c4 = st.columns(2)
             c3.metric("Текущая Выручка", f"{total_rev:,.0f} ₴")
             c4.metric("Моделируемая Выручка", f"{proj_rev:,.0f} ₴", f"+{proj_rev - total_rev:,.0f} ₴")
-            c5.metric("Доп. Прибыль (ROI)", f"{proj_profit - total_profit:,.0f} ₴")
 
-        # --- 4. MARKETING & GEO ---
+        # --- 5. MARKETING & GEO ---
         with tabs[4]:
             st.title("Маркетинговая аналитика")
             fig_sun = px.sunburst(df, path=['utm_source', 'utm_medium'], values='revenue', title="Структура выручки по каналам")
@@ -209,46 +267,30 @@ if uploaded_file:
             fig_geo = px.bar(city_rev, x='city', y='revenue', title="Топ-20 городов по выручке", text_auto='.2s')
             st.plotly_chart(fig_geo, use_container_width=True)
 
-        # --- 5. AI DIRECTOR & GROWTH PLAN ---
+        # --- 6. AI DIRECTOR & GROWTH PLAN ---
         with tabs[6]:
             st.title("🧠 ИИ Финансовый Директор")
             if not api_key:
-                st.warning("⚠️ Введите Google API Key в боковом меню для активации AI-Директора.")
+                st.warning("⚠️ Введите Google API Key в боковом меню для активации.")
             else:
                 if st.button("Генерировать отчет Совета Директоров"):
                     with st.spinner("Анализ данных нейросетью..."):
-                        try:
-                            genai.configure(api_key=api_key)
-                            model = genai.GenerativeModel('gemini-1.5-flash')
-                            
-                            # Формируем JSON-сводку для AI
-                            ai_context = {
-                                "finance": {"revenue": total_rev, "profit": total_profit, "aov": aov, "orders": orders},
-                                "top_cities": city_rev.to_dict('records'),
-                                "marketing": df.groupby('utm_source')['revenue'].sum().sort_values(ascending=False).head(5).to_dict()
-                            }
-                            
-                            prompt = f"""Ты — CFO, CMO и CEO компании уровня Big4. Изучи этот JSON массив финансовых данных: {json.dumps(ai_context)}. 
-                            Подготовь строгий отчет для совета директоров. Разделы: 1. Executive Summary 2. Основные риски и потери 3. Точки кратного роста 4. План по маркетингу на 30 дней. Пиши профессионально, используй цифры, предлагай жесткие решения."""
-                            
-                            response = model.generate_content(prompt)
-                            st.markdown(response.text)
-                        except Exception as e:
-                            st.error(f"Ошибка API: {str(e)}")
+                        genai.configure(api_key=api_key)
+                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        ai_context = {
+                            "finance": {"revenue": total_rev, "orders": unique_orders},
+                            "top_products": prod_df.head(3).to_dict('records')
+                        }
+                        prompt = f"Ты CFO. Данные: {json.dumps(ai_context)}. Напиши стратегический вывод."
+                        st.markdown(model.generate_content(prompt).text)
 
         with tabs[7]:
             st.title("🚀 AI План роста бизнеса")
-            if api_key:
-                if st.button("Разработать план на 3-6-12 месяцев"):
-                    with st.spinner("Построение стратегии..."):
-                        try:
-                            model = genai.GenerativeModel('gemini-1.5-flash')
-                            prompt_growth = f"Основываясь на данных: выручка {total_rev}, средний чек {aov}, лучшие каналы {df['utm_source'].unique()[:3]}. Напиши план масштабирования бизнеса на 3, 6 и 12 месяцев. Включи конкретные гипотезы по рекламе, KPI и прогноз ROI."
-                            res_growth = model.generate_content(prompt_growth)
-                            st.markdown(res_growth.text)
-                        except Exception as e:
-                            st.error("Проверьте API ключ.")
-            else:
-                st.info("Требуется API ключ.")
+            if api_key and st.button("Разработать план"):
+                with st.spinner("Построение стратегии..."):
+                    genai.configure(api_key=api_key)
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    prompt_growth = f"Основываясь на выручке {total_rev} ₴ и чеке {aov} ₴. Напиши план масштабирования на 3, 6 и 12 месяцев."
+                    st.markdown(model.generate_content(prompt_growth).text)
 else:
-    st.info("👈 Загрузите реестр заказов в боковом меню для начала аудита.")
+    st.info("👈 Загрузите реестр заказов в боковом меню для старта.")
