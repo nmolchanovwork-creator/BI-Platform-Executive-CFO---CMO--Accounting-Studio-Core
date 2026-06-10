@@ -156,14 +156,26 @@ def generate_global_forecast(df, periods, freq='D'):
 st.sidebar.title("Настройки платформы")
 
 # Выбор ИИ модели
-ai_models = {
-    "Gemini 1.5 Flash (Быстрая)": "models/gemini-1.5-flash-latest",
-    "Gemini 1.5 Pro (Умная)": "models/gemini-1.5-pro-latest"
-}
-selected_model_name = st.sidebar.selectbox("🤖 Выберите ИИ-модель", list(ai_models.keys()))
-system_model_path = ai_models[selected_model_name]
-
+# --- ДИНАМИЧЕСКИЙ ВЫБОР МОДЕЛЕЙ ---
+# Сначала нужно настроить API, чтобы получить список моделей
 api_key = st.sidebar.text_input("🔑 Google API Key", type="password")
+
+if api_key:
+    genai.configure(api_key=api_key)
+    try:
+        # Получаем список всех моделей, поддерживающих generateContent
+        models_info = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # Фильтруем, чтобы оставить только актуальные Gemini (1.5, 1.0)
+        gemini_models = [m for m in models_info if 'gemini' in m]
+        
+        selected_model_path = st.sidebar.selectbox("🤖 Выберите ИИ-модель", gemini_models)
+    except Exception as e:
+        st.sidebar.error("Не удалось загрузить список моделей. Проверьте API Key.")
+        selected_model_path = "models/gemini-1.5-flash-latest" # Дефолт при ошибке
+else:
+    selected_model_path = "models/gemini-1.5-flash-latest"
+    st.sidebar.warning("Введите API Key для загрузки списка моделей")
 
 uploaded_file = st.sidebar.file_uploader("📂 Загрузить реестр заказов", type=['csv', 'xlsx'])
 
