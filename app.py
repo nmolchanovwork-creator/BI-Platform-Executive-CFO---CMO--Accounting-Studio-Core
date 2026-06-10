@@ -152,27 +152,37 @@ def generate_global_forecast(df, periods, freq='D'):
     forecast = m.predict(future)
     return m, forecast, daily_rev
 
+# --- HELPER FUNCTION FOR MONTHLY DISTRIBUTION ---
+def get_monthly_distribution(df, entity_col, monthly_totals, total_historical_rev, metric='revenue'):
+    # Распределяет прогноз по сущностям (каналам/городам/товарам) на основе их исторической доли
+    entity_rev = df.groupby(entity_col)[metric].sum().reset_index()
+    entity_rev['share'] = entity_rev[metric] / total_historical_rev if total_historical_rev > 0 else 0
+    
+    dist_data = []
+    for _, row in entity_rev.iterrows():
+        row_data = {entity_col: row[entity_col], 'Факт (₴)': row[metric]}
+        for _, m_row in monthly_totals.iterrows():
+            row_data[m_row['month_str']] = row['share'] * m_row['yhat']
+        dist_data.append(row_data)
+        
+    res_df = pd.DataFrame(dist_data).sort_values('Факт (₴)', ascending=False)
+    return res_df
+
 # --- UI & SIDEBAR ---
 st.sidebar.title("Настройки платформы")
 
 # Выбор ИИ модели
-# --- ДИНАМИЧЕСКИЙ ВЫБОР МОДЕЛЕЙ ---
-# Сначала нужно настроить API, чтобы получить список моделей
 api_key = st.sidebar.text_input("🔑 Google API Key", type="password")
 
 if api_key:
     genai.configure(api_key=api_key)
     try:
-        # Получаем список всех моделей, поддерживающих generateContent
         models_info = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        # Фильтруем, чтобы оставить только актуальные Gemini (1.5, 1.0)
         gemini_models = [m for m in models_info if 'gemini' in m]
-        
         selected_model_path = st.sidebar.selectbox("🤖 Выберите ИИ-модель", gemini_models)
     except Exception as e:
         st.sidebar.error("Не удалось загрузить список моделей. Проверьте API Key.")
-        selected_model_path = "models/gemini-1.5-flash-latest" # Дефолт при ошибке
+        selected_model_path = "models/gemini-1.5-flash-latest"
 else:
     selected_model_path = "models/gemini-1.5-flash-latest"
     st.sidebar.warning("Введите API Key для загрузки списка моделей")
@@ -187,28 +197,32 @@ if uploaded_file:
         st.sidebar.markdown("---")
         st.sidebar.markdown("### 🎯 Фильтры и Прогноз")
         
-        # Горизонт прогноза перенесен в сайдбар!
         horizon_months = st.sidebar.slider("Горизонт прогноза (месяцев)", 1, 12, 3)
         
         all_statuses = raw_df['status'].unique().tolist()
         status_filter = st.sidebar.multiselect("Статус заказа", all_statuses, default=all_statuses)
         df = raw_df[raw_df['status'].isin(status_filter)]
         
-        # ГЛОБАЛЬНЫЙ ПРОГНОЗ (работает в фоне)
         with st.spinner("Генерация глобального прогноза..."):
             m, forecast, actual = generate_global_forecast(df, horizon_months * 30)
             
-            # Считаем коэффициенты роста для распределения на другие вкладки
-            if forecast is not None:
+            total_rev = df['revenue'].sum()
+            
+            # Подготовка помесячных прогнозов для вкладок
+            if forecast is not None and not actual.empty:
                 max_date = pd.to_datetime(actual['ds'].max())
-                future_forecast = forecast[forecast['ds'] > max_date]
+                future_forecast = forecast[forecast['ds'] > max_date].copy()
                 future_total_rev = future_forecast['yhat'].sum()
+                
+                future_forecast['month_str'] = future_forecast['ds'].dt.strftime('%Y-%m')
+                monthly_forecast_totals = future_forecast.groupby('month_str')[['yhat', 'yhat_upper', 'yhat_lower']].sum().reset_index()
+                
                 historical_total_rev = actual['y'].sum()
-                # Коэффициент соотношения будущего периода к историческому
                 growth_coeff = future_total_rev / historical_total_rev if historical_total_rev > 0 else 1
             else:
                 future_total_rev = 0
                 growth_coeff = 0
+                monthly_forecast_totals = pd.DataFrame()
 
         # UI TABS
         tabs = st.tabs([
@@ -220,7 +234,6 @@ if uploaded_file:
         # --- 1. DASHBOARD ---
         with tabs[0]:
             st.title("Executive Dashboard")
-            total_rev = df['revenue'].sum()
             unique_orders = df['order_id'].nunique()
             aov = total_rev / unique_orders if unique_orders > 0 else 0
             
@@ -247,17 +260,22 @@ if uploaded_file:
                 fig.update_layout(template="plotly_white", hovermode="x unified")
                 st.plotly_chart(fig, use_container_width=True)
 
-                st.markdown("### 📋 Таблица будущих продаж (с детализацией по дням)")
-                # Подготовка красивой сгруппированной таблицы
-                future_df = future_forecast[['ds', 'yhat', 'yhat_upper', 'yhat_lower']].copy()
-                future_df['Месяц'] = future_df['ds'].dt.strftime('%Y-%m')
-                future_df['Дата'] = future_df['ds'].dt.strftime('%d.%m.%Y')
-                future_df = future_df.rename(columns={'yhat': 'Базовый прогноз (₴)', 'yhat_upper': 'Оптимистичный (₴)', 'yhat_lower': 'Пессимистичный (₴)'})
+                st.markdown("### 📅 Агрегированный прогноз по месяцам")
+                month_df = monthly_forecast_totals.rename(columns={
+                    'month_str': 'Месяц', 
+                    'yhat': 'Базовый (₴)', 
+                    'yhat_upper': 'Оптимистичный (₴)', 
+                    'yhat_lower': 'Пессимистичный (₴)'
+                })
+                st.dataframe(month_df.style.format({col: "{:,.0f}" for col in month_df.columns if col != 'Месяц'}), use_container_width=True)
+
+                st.markdown("### 📋 Детализация прогноза по дням")
+                future_df_daily = future_forecast[['ds', 'yhat', 'yhat_upper', 'yhat_lower']].copy()
+                future_df_daily['Месяц'] = future_df_daily['ds'].dt.strftime('%Y-%m')
+                future_df_daily['Дата'] = future_df_daily['ds'].dt.strftime('%d.%m.%Y')
+                future_df_daily = future_df_daily.rename(columns={'yhat': 'Базовый прогноз (₴)', 'yhat_upper': 'Оптимистичный (₴)', 'yhat_lower': 'Пессимистичный (₴)'})
                 
-                # Устанавливаем MultiIndex для группировки Месяц -> Дата
-                styled_df = future_df.set_index(['Месяц', 'Дата'])[['Базовый прогноз (₴)', 'Оптимистичный (₴)', 'Пессимистичный (₴)']]
-                
-                # Выводим таблицу с форматом валюты
+                styled_df = future_df_daily.set_index(['Месяц', 'Дата'])[['Базовый прогноз (₴)', 'Оптимистичный (₴)', 'Пессимистичный (₴)']]
                 st.dataframe(styled_df.style.format("{:,.0f}"), use_container_width=True, height=400)
             else:
                 st.warning("Недостаточно данных для прогноза (нужно минимум 10 дней продаж).")
@@ -265,86 +283,155 @@ if uploaded_file:
         # --- 3. WHAT-IF MODELING ---
         with tabs[2]:
             st.title("Стратегическое моделирование (Будущие периоды)")
-            st.write(f"Базой для моделирования выступает **Прогнозная выручка** на следующие {horizon_months} мес. ({future_total_rev:,.0f} ₴).")
+            st.write(f"Основа для моделирования — **Оптимистичный сценарий** на следующие {horizon_months} мес.")
             
             c1, c2 = st.columns(2)
             orders_boost = c1.slider("Рост объема заказов / Трафика (%)", 0.0, 100.0, 15.0, 1.0)
             aov_boost = c2.slider("Рост среднего чека / Цен (%)", 0.0, 100.0, 10.0, 1.0)
             
-            # ИСПРАВЛЕНО: Теперь рост объема заказов честно умножает всю будущую выручку
-            proj_future_rev = future_total_rev * (1 + orders_boost/100) * (1 + aov_boost/100)
-            
-            c3, c4, c5 = st.columns(3)
-            c3.metric("Базовый Прогноз", f"{future_total_rev:,.0f} ₴")
-            c4.metric("Моделируемый Прогноз", f"{proj_future_rev:,.0f} ₴", f"+{proj_future_rev - future_total_rev:,.0f} ₴")
-            c5.metric("Доп. Прибыль от изменений", f"{(proj_future_rev - future_total_rev) * 0.35:,.0f} ₴")
+            if not monthly_forecast_totals.empty:
+                st.markdown("### 📊 Таблица моделирования по месяцам")
+                
+                model_df = monthly_forecast_totals[['month_str', 'yhat_upper']].copy()
+                model_df.rename(columns={'month_str': 'Месяц', 'yhat_upper': 'Оптимистичная база (₴)'}, inplace=True)
+                
+                # Применяем коэффициенты моделирования к каждому месяцу
+                model_df['С учетом изменений (₴)'] = model_df['Оптимистичная база (₴)'] * (1 + orders_boost/100) * (1 + aov_boost/100)
+                model_df['Доп. Прибыль от изменений (₴)'] = (model_df['С учетом изменений (₴)'] - model_df['Оптимистичная база (₴)']) * 0.35 # маржинальность 35%
+                
+                format_dict_mod = {
+                    'Оптимистичная база (₴)': "{:,.0f}",
+                    'С учетом изменений (₴)': "{:,.0f}",
+                    'Доп. Прибыль от изменений (₴)': "{:,.0f}"
+                }
+                
+                # Добавляем строку "Итого"
+                total_row = pd.DataFrame([{
+                    'Месяц': 'ИТОГО',
+                    'Оптимистичная база (₴)': model_df['Оптимистичная база (₴)'].sum(),
+                    'С учетом изменений (₴)': model_df['С учетом изменений (₴)'].sum(),
+                    'Доп. Прибыль от изменений (₴)': model_df['Доп. Прибыль от изменений (₴)'].sum()
+                }])
+                model_df = pd.concat([model_df, total_row], ignore_index=True)
+                
+                st.dataframe(model_df.style.format(format_dict_mod), use_container_width=True)
+            else:
+                st.warning("Нет данных прогноза для моделирования.")
 
         # --- 4. MARKETING ---
         with tabs[3]:
             st.title("Маркетинговая аналитика и Прогноз")
             
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                # Увеличена диаграмма
-                fig_sun = px.sunburst(df, path=['utm_source', 'utm_medium', 'utm_campaign'], values='revenue')
-                fig_sun.update_layout(height=650, margin=dict(t=10, l=10, r=10, b=10))
-                st.plotly_chart(fig_sun, use_container_width=True)
+            # 1. График на всю ширину
+            fig_sun = px.sunburst(df, path=['utm_source', 'utm_medium', 'utm_campaign'], values='revenue', title="Структура исторических доходов по каналам")
+            fig_sun.update_layout(height=600, margin=dict(t=40, l=10, r=10, b=10))
+            st.plotly_chart(fig_sun, use_container_width=True)
             
-            with c2:
-                st.markdown("### 💡 Авто-Аналитика")
-                top_source = df.groupby('utm_source')['revenue'].sum().sort_values(ascending=False).head(1)
-                st.info(f"🏆 **Главный канал:** {top_source.index[0]} приносит {top_source.values[0] / total_rev * 100:.1f}% всей выручки.")
-                st.warning(f"⚠️ Если отключить источник `{top_source.index[0]}`, кассовый разрыв в будущих периодах может составить до {future_total_rev * (top_source.values[0] / total_rev):,.0f} ₴.")
+            st.markdown("---")
+            
+            # 2. Авто-Аналитика
+            st.markdown("### 💡 Расширенная Авто-Аналитика")
+            channel_rev = df.groupby('utm_source')['revenue'].sum().sort_values(ascending=False)
+            if not channel_rev.empty:
+                top_source = channel_rev.index[0]
+                top_val = channel_rev.values[0]
+                bottom_source = channel_rev.index[-1]
                 
-                st.markdown(f"### 📈 Прогноз по каналам на {horizon_months} мес.")
-                # Распределяем будущий прогноз пропорционально историческим каналам
-                mkt_df = df.groupby('utm_source')['revenue'].sum().reset_index()
-                mkt_df['Прогноз (₴)'] = mkt_df['revenue'] * growth_coeff
-                mkt_df = mkt_df.rename(columns={'revenue': 'Факт (₴)', 'utm_source': 'Источник'}).sort_values('Прогноз (₴)', ascending=False)
-                st.dataframe(mkt_df.style.format({'Факт (₴)': "{:,.0f}", 'Прогноз (₴)': "{:,.0f}"}), hide_index=True)
+                c_auto1, c_auto2 = st.columns(2)
+                with c_auto1:
+                    st.success(f"🏆 **Локомотив продаж:** `{top_source}` генерирует {top_val / total_rev * 100:.1f}% всей исторической выручки ({top_val:,.0f} ₴).")
+                    st.warning(f"⚠️ **Риск концентрации:** Кассовый разрыв при отключении `{top_source}` составит ~{future_total_rev * (top_val / total_rev):,.0f} ₴ за период прогноза.")
+                with c_auto2:
+                    st.info(f"🔍 **Зона роста:** `{bottom_source}` показывает минимальную отдачу. Рекомендуется пересмотреть бюджет или креативы этого канала.")
+                    st.info("💡 **Рекомендация:** Диверсифицируйте трафик, чтобы доля главного канала не превышала 40-50% для устойчивости бизнеса.")
+
+            st.markdown("---")
+            
+            # 3. Помесячный прогноз
+            st.markdown(f"### 📈 Прогноз по источникам (Детализация по месяцам)")
+            if not monthly_forecast_totals.empty:
+                mkt_dist = get_monthly_distribution(df, 'utm_source', monthly_forecast_totals, total_rev)
+                mkt_dist = mkt_dist.rename(columns={'utm_source': 'Источник (utm_source)'})
+                
+                # Форматирование для всех числовых колонок
+                format_cols = {col: "{:,.0f}" for col in mkt_dist.columns if col != 'Источник (utm_source)'}
+                st.dataframe(mkt_dist.style.format(format_cols), hide_index=True, use_container_width=True)
+            else:
+                st.info("Мало данных для расчета помесячного прогноза.")
 
         # --- 5. GEO ---
         with tabs[4]:
             st.title("Геоаналитика и Прогноз по регионам")
-            city_rev = df.groupby('city')['revenue'].sum().sort_values(ascending=False).reset_index()
-            city_rev['Прогноз (₴)'] = city_rev['revenue'] * growth_coeff
+            city_rev_df = df.groupby('city')['revenue'].sum().sort_values(ascending=False).reset_index()
             
-            fig_geo = px.bar(city_rev.head(20), x='city', y='revenue', title="Топ-20 городов (Исторический факт)", text_auto='.2s')
+            fig_geo = px.bar(city_rev_df.head(20), x='city', y='revenue', title="Топ-20 городов (Исторический факт)", text_auto='.2s')
             st.plotly_chart(fig_geo, use_container_width=True)
             
-            st.markdown(f"### 📍 Ожидаемые продажи по городам (След. {horizon_months} мес.)")
-            city_show = city_rev[['city', 'revenue', 'Прогноз (₴)']].rename(columns={'city': 'Город', 'revenue': 'Факт (₴)'})
-            st.dataframe(city_show.head(15).style.format({'Факт (₴)': "{:,.0f}", 'Прогноз (₴)': "{:,.0f}"}), use_container_width=True)
+            st.markdown("### 💡 Авто-Аналитика по регионам")
+            if not city_rev_df.empty:
+                top_city_name = city_rev_df.iloc[0]['city']
+                top_city_share = city_rev_df.iloc[0]['revenue'] / total_rev * 100
+                st.info(f"📍 **Основной регион:** `{top_city_name}` формирует {top_city_share:.1f}% выручки. Рекомендуется укреплять логистику и локальный маркетинг в этом регионе.")
+            
+            st.markdown(f"### 📍 Ожидаемые продажи по городам (Помесячно)")
+            if not monthly_forecast_totals.empty:
+                geo_dist = get_monthly_distribution(df, 'city', monthly_forecast_totals, total_rev)
+                geo_dist = geo_dist.rename(columns={'city': 'Город'})
+                
+                format_cols_geo = {col: "{:,.0f}" for col in geo_dist.columns if col != 'Город'}
+                st.dataframe(geo_dist.head(25).style.format(format_cols_geo), use_container_width=True, hide_index=True)
+            else:
+                st.info("Мало данных для расчета помесячного прогноза.")
 
         # --- 6. PRODUCTS ---
         with tabs[5]:
             st.title("Товарная аналитика")
-            prod_df = df.groupby(['art', 'product']).agg({'qty':'sum', 'revenue':'sum'}).reset_index()
-            prod_df = prod_df.sort_values(by='revenue', ascending=False)
-            st.dataframe(prod_df.head(50).style.format({"revenue": "{:,.2f} ₴"}), use_container_width=True)
+            
+            # Создаем объединенный столбец для продуктов
+            df['product_full'] = df['art'] + " - " + df['product']
+            
+            st.markdown(f"### 📦 Прогноз продаж по товарам (Помесячно на {horizon_months} мес.)")
+            if not monthly_forecast_totals.empty:
+                prod_dist = get_monthly_distribution(df, 'product_full', monthly_forecast_totals, total_rev)
+                prod_dist = prod_dist.rename(columns={'product_full': 'Артикул и Наименование'})
+                
+                format_cols_prod = {col: "{:,.0f}" for col in prod_dist.columns if col != 'Артикул и Наименование'}
+                st.dataframe(prod_dist.head(50).style.format(format_cols_prod), use_container_width=True, hide_index=True)
+            else:
+                # Фоллбэк на исторические данные
+                prod_df = df.groupby(['art', 'product']).agg({'qty':'sum', 'revenue':'sum'}).reset_index()
+                prod_df = prod_df.sort_values(by='revenue', ascending=False)
+                st.dataframe(prod_df.head(50).style.format({"revenue": "{:,.0f} ₴"}), use_container_width=True)
 
-        # --- 7 & 8. AI DIRECTOR ---
+        # --- 7. AI DIRECTOR ---
         with tabs[6]:
             st.title("🧠 ИИ Финансовый Директор")
-            if not api_key: st.warning("⚠️ Введите Google API Key в боковом меню.")
+            if not api_key: 
+                st.warning("⚠️ Введите Google API Key в боковом меню.")
             else:
                 if st.button("Генерировать отчет Совета Директоров"):
-                    with st.spinner(f"Анализ данных через {selected_model_name}..."):
+                    # ИСПРАВЛЕНО: используются правильные переменные selected_model_path
+                    with st.spinner(f"Анализ данных через {selected_model_path}..."):
                         genai.configure(api_key=api_key)
-                        model = genai.GenerativeModel(system_model_path)
+                        model = genai.GenerativeModel(selected_model_path)
+                        
+                        top_city = city_rev_df.iloc[0]['city'] if not city_rev_df.empty else ""
                         ai_context = {
-                            "finance_fact": total_rev, "finance_forecast": future_total_rev,
-                            "top_city": city_rev.iloc[0]['city'] if not city_rev.empty else ""
+                            "finance_fact": total_rev, 
+                            "finance_forecast": future_total_rev,
+                            "top_city": top_city
                         }
                         prompt = f"Ты CFO. Данные: {json.dumps(ai_context)}. Напиши стратегический вывод."
                         st.markdown(model.generate_content(prompt).text)
 
+        # --- 8. AI PLAN ---
         with tabs[7]:
             st.title("🚀 AI План роста бизнеса")
             if api_key and st.button("Разработать план"):
-                with st.spinner(f"Построение стратегии через {selected_model_name}..."):
+                # ИСПРАВЛЕНО: используются правильные переменные
+                with st.spinner(f"Построение стратегии через {selected_model_path}..."):
                     genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel(system_model_path)
+                    model = genai.GenerativeModel(selected_model_path)
                     st.markdown(model.generate_content(f"Основываясь на выручке {total_rev} ₴. Напиши план масштабирования.").text)
 else:
     st.info("👈 Загрузите реестр заказов в боковом меню для старта.")
