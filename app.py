@@ -703,20 +703,30 @@ if uploaded_file:
 
                 # Waterfall
                 section("📊 Водопадная диаграмма декомпозиции прироста")
+                wf_labels = ['База', 'Δ Заказы', 'Δ Чек', 'Δ Синергия', 'Итого']
+                wf_values = [t_base, t_orders, t_aov_d, t_syn, t_base + t_total]
+                wf_text   = [f"₴ {t_base:,.0f}",
+                             f"{t_orders:+,.0f}",
+                             f"{t_aov_d:+,.0f}",
+                             f"{t_syn:+,.0f}",
+                             f"₴ {t_base+t_total:,.0f}"]
                 fig_wf = go.Figure(go.Waterfall(
                     orientation="v",
                     measure=['absolute','relative','relative','relative','total'],
-                    x=['База','Δ Заказы','Δ Чек','Δ Синергия','Итого'],
-                    y=[t_base, t_orders, t_aov_d, t_syn, t_base+t_total],
+                    x=wf_labels,
+                    y=wf_values,
+                    text=wf_text,
+                    textposition="outside",
+                    textfont=dict(size=13, color='#e2e8f0'),
                     connector=dict(line=dict(color='rgba(255,255,255,0.1)')),
                     decreasing=dict(marker_color='rgba(239,68,68,0.7)'),
                     increasing=dict(marker_color='rgba(16,185,129,0.7)'),
                     totals=dict(marker_color='rgba(99,102,241,0.8)')
                 ))
-                fig_wf.update_layout(title="Декомпозиция прироста выручки (₴)")
-                T(fig_wf, 360)
+                fig_wf.update_layout(title="Декомпозиция прироста выручки (₴)", uniformtext_minsize=11)
+                T(fig_wf, 400)
                 st.plotly_chart(fig_wf, use_container_width=True)
-                caption("Водопадная диаграмма (Waterfall chart) наглядно показывает: сколько выручки даёт каждый рычаг. «База» — стартовая точка, «Δ Заказы» — вклад роста числа заказов, «Δ Чек» — вклад роста суммы заказа, «Δ Синергия» — дополнительный эффект от одновременного роста обоих показателей, «Итого» — финальная сумма.")
+                caption("Водопадная диаграмма (Waterfall chart) наглядно показывает: сколько выручки даёт каждый рычаг. «База» — стартовая точка, «Δ Заказы» — вклад роста числа заказов, «Δ Чек» — вклад роста суммы заказа, «Δ Синергия» — дополнительный эффект от одновременного роста обоих показателей, «Итого» — финальная сумма. Цифры над столбцами — точные значения в гривнах.")
             else:
                 st.warning("Нет данных прогноза. Нужно минимум 10 дней продаж.")
 
@@ -728,21 +738,37 @@ if uploaded_file:
 
             channel_rev = df.groupby('utm_source')['revenue'].sum().sort_values(ascending=False)
 
-            section("🌐 Структура доходов по UTM-цепочке (источник → канал → кампания)")
-            fig_sun = px.sunburst(df, path=['utm_source','utm_medium','utm_campaign'], values='revenue',
-                                  color_discrete_sequence=px.colors.qualitative.Vivid)
-            fig_sun.update_layout(title="Доходы по маркетинговым каналам (иерархия)")
-            T(fig_sun, 460)
-            st.plotly_chart(fig_sun, use_container_width=True)
-            caption("Солнечная диаграмма (Sunburst) показывает иерархию: внешнее кольцо — UTM Source (откуда пришёл клиент: google, facebook, email и т.д.), среднее — UTM Medium (тип трафика: cpc, organic, email), внутреннее — конкретная кампания. Размер сектора = доля выручки.")
-
             section("📊 Выручка по источникам трафика")
-            fig_ch = go.Figure(go.Bar(y=channel_rev.index, x=channel_rev.values, orientation='h',
-                                      marker=dict(color='rgba(99,102,241,0.75)')))
-            fig_ch.update_layout(title="Выручка по каналам (₴)")
-            T(fig_ch, 320)
+            ch_count = len(channel_rev)
+            bar_h = max(380, ch_count * 52)
+            fig_ch = go.Figure(go.Bar(
+                y=channel_rev.index,
+                x=channel_rev.values,
+                orientation='h',
+                text=[f"₴ {v:,.0f}  ({v/total_rev*100:.1f}%)" for v in channel_rev.values],
+                textposition='outside',
+                textfont=dict(size=13, color='#e2e8f0'),
+                marker=dict(
+                    color=list(range(len(channel_rev))),
+                    colorscale=[[0,'rgba(99,102,241,0.4)'],[1,'rgba(99,102,241,1)']],
+                    showscale=False
+                )
+            ))
+            fig_ch.update_layout(title="Выручка по каналам трафика (₴)", xaxis=dict(showticklabels=False))
+            T(fig_ch, bar_h)
             st.plotly_chart(fig_ch, use_container_width=True)
-            caption("Горизонтальный барчарт: каждая строка — один источник трафика (UTM Source). Длина полосы = сумма выручки, которую принёс этот канал за весь период.")
+            caption("Горизонтальный барчарт: каждая строка — один источник трафика (UTM Source). Длина полосы = сумма выручки за весь период. Над полосой указаны абсолютная сумма и доля в % от общей выручки.")
+
+            section("🌐 Структура доходов по UTM-цепочке (источник → канал → кампания)")
+            fig_sun = px.sunburst(
+                df, path=['utm_source','utm_medium','utm_campaign'], values='revenue',
+                color_discrete_sequence=px.colors.qualitative.Vivid
+            )
+            fig_sun.update_layout(title="Доходы по UTM-цепочке: источник → канал → кампания",
+                                  margin=dict(t=50, l=0, r=0, b=0))
+            T(fig_sun, 620)
+            st.plotly_chart(fig_sun, use_container_width=True)
+            caption("Солнечная диаграмма (Sunburst) показывает трёхуровневую иерархию UTM-меток. Центр — источник (google, facebook и т.д.), средний слой — тип трафика (cpc, organic, email), внешний — конкретная кампания. Кликайте на сегменты для детализации. Размер сектора = доля выручки.")
 
             if not channel_rev.empty:
                 top_s = channel_rev.index[0]; top_v = channel_rev.values[0]
@@ -888,86 +914,153 @@ if uploaded_file:
             st.markdown("""
             <div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);border-radius:10px;padding:16px 20px;margin-bottom:20px;font-size:14px;line-height:1.8;color:#cbd5e1">
             <strong>Что такое юнит-экономика?</strong><br>
-            Юнит-экономика — это финансовый анализ одной единицы бизнеса (одного заказа, одного клиента). 
+            Юнит-экономика — это финансовый анализ одной единицы бизнеса (одного заказа, одного клиента).
             Отвечает на вопрос: <em>сколько денег зарабатывает или теряет бизнес с каждого заказа?</em>
             Позволяет понять — масштабирование будет прибыльным или убыточным.
             </div>
             """, unsafe_allow_html=True)
 
-            rev_per_day   = total_rev / days_total
+            rev_per_day    = total_rev / days_total
             orders_per_day = unique_orders / days_total
+            rev_per_week   = rev_per_day * 7
+            rev_per_month  = rev_per_day * 30
+            median_order   = unit_eco['revenue'].median()
+            max_order      = unit_eco['revenue'].max()
+            min_order_pos  = unit_eco[unit_eco['revenue'] > 0]['revenue'].min()
+            std_order      = unit_eco['revenue'].std()
+            cv_order       = std_order / aov * 100 if aov > 0 else 0
+            avg_items      = unit_eco['items'].mean()
+            p25 = unit_eco['revenue'].quantile(0.25)
+            p75 = unit_eco['revenue'].quantile(0.75)
+            iqr = p75 - p25
 
-            k1, k2, k3, k4, k5, k6 = st.columns(6)
-            k1.metric("Выручка в день", f"₴ {rev_per_day:,.0f}")
-            k2.metric("Заказов в день", f"{orders_per_day:.1f}")
-            k3.metric("Средний чек (AOV)", f"₴ {aov:,.0f}")
-            k4.metric("Валовая прибыль / заказ", f"₴ {gp_per_order:,.0f}")
-            k5.metric("LTV-прокси", f"₴ {ltv_proxy:,.0f}")
-            k6.metric("Макс. допустимый CAC", f"₴ {max_cac:,.0f}")
+            # — Строка 1: скоростные метрики
+            section("⚡ Скоростные метрики бизнеса")
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("Выручка в день",    f"₴ {rev_per_day:,.0f}")
+            k2.metric("Выручка в неделю",  f"₴ {rev_per_week:,.0f}")
+            k3.metric("Выручка в месяц",   f"₴ {rev_per_month:,.0f}")
+            k4.metric("Заказов в день",    f"{orders_per_day:.1f}")
+            k5.metric("Товаров в заказе",  f"{avg_items:.1f} шт.")
+
+            # — Строка 2: метрики заказа
+            section("🧾 Метрики среднего заказа")
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Средний чек (AOV)", f"₴ {aov:,.0f}")
+            m2.metric("Медианный чек",     f"₴ {median_order:,.0f}")
+            m3.metric("Максимальный чек",  f"₴ {max_order:,.0f}")
+            m4.metric("Мин. чек (>0)",     f"₴ {min_order_pos:,.0f}")
+            m5.metric("Вариативность (CV)", f"{cv_order:.1f}%")
+
+            # — Строка 3: LTV / CAC
+            section("💎 LTV & CAC — экономика привлечения клиента")
+            l1, l2, l3 = st.columns(3)
+            l1.metric("LTV-прокси",             f"₴ {ltv_proxy:,.0f}")
+            l2.metric("Макс. допустимый CAC",   f"₴ {max_cac:,.0f}")
+            l3.metric("LTV / CAC коэф. (цель≥3)", f"{ltv_proxy/max_cac:.1f}x" if max_cac > 0 else "N/A")
 
             insight("""
             <strong>Расшифровка ключевых показателей:</strong><br>
             • <strong>AOV (Average Order Value)</strong> — средний чек, средняя сумма одного заказа. Формула: Выручка ÷ Кол-во заказов.<br>
-            • <strong>Валовая прибыль / заказ</strong> — сколько зарабатывает бизнес с одного заказа после вычета себестоимости товара (задаётся в настройках как % маржи).<br>
-            • <strong>LTV (Lifetime Value, пожизненная ценность клиента)</strong> — сколько денег приносит один клиент за всё время сотрудничества. Прокси-формула: AOV × 3.2 (среднее кол-во повторных заказов).<br>
-            • <strong>CAC (Customer Acquisition Cost)</strong> — стоимость привлечения одного нового клиента. Максимально допустимый CAC = 30% от валовой прибыли с заказа. Если реальный CAC выше — бизнес работает в убыток на привлечении.
+            • <strong>Медианный чек</strong> — чек «по середине»: половина заказов дороже, половина дешевле. Если медиана сильно ниже среднего — есть крупные выбросы, завышающие AOV.<br>
+            • <strong>CV (Coefficient of Variation — коэффициент вариации)</strong> — стабильность чеков. До 30% = стабильно, 30-60% = умеренно, выше 60% = высокая непредсказуемость.<br>
+            • <strong>LTV (Lifetime Value)</strong> — сколько денег приносит один клиент за всё время. Прокси: AOV × 3.2 (среднее кол-во повторных покупок).<br>
+            • <strong>CAC (Customer Acquisition Cost)</strong> — стоимость привлечения одного клиента. Макс. CAC = 30% от валовой прибыли с заказа. LTV/CAC ≥ 3 — золотое правило масштабирования.
             """, 'default', '📚')
 
-            section("📊 Распределение заказов по сумме (гистограмма)")
+            section("📊 Распределение заказов по сумме")
             p95 = unit_eco['revenue'].quantile(0.95)
-            fig_hist = go.Figure(go.Histogram(x=unit_eco['revenue'].clip(upper=p95), nbinsx=40,
-                                              marker_color='rgba(99,102,241,0.65)', name='Заказы'))
-            fig_hist.update_layout(title=f"Сумма заказов (до 95-го перцентиля, P95 = ₴{p95:,.0f})")
-            T(fig_hist, 340)
+            fig_hist = go.Figure()
+            fig_hist.add_trace(go.Histogram(
+                x=unit_eco['revenue'].clip(upper=p95), nbinsx=40,
+                marker_color='rgba(99,102,241,0.65)', name='Заказы'
+            ))
+            fig_hist.add_vline(x=aov, line_dash="dash", line_color="#f59e0b",
+                               annotation_text=f"AOV ₴{aov:,.0f}", annotation_font_color="#f59e0b")
+            fig_hist.add_vline(x=median_order, line_dash="dot", line_color="#10b981",
+                               annotation_text=f"Медиана ₴{median_order:,.0f}", annotation_font_color="#10b981")
+            fig_hist.update_layout(title=f"Распределение суммы заказов (P95 = ₴{p95:,.0f})")
+            T(fig_hist, 360)
             st.plotly_chart(fig_hist, use_container_width=True)
-            caption("Гистограмма показывает сколько заказов попадает в каждый ценовой диапазон. Пик гистограммы — это самый популярный диапазон сумм заказа. Срезано на 95-м перцентиле чтобы убрать выбросы (очень крупные нетипичные заказы) и сделать график читабельным.")
+            caption("Гистограмма показывает сколько заказов попадает в каждый ценовой диапазон. Жёлтая линия — средний чек (AOV), зелёная — медиана. Если AOV сильно правее медианы — несколько крупных заказов завышают среднее. Срезано на 95-м перцентиле чтобы убрать нетипичные выбросы.")
 
-            section("📦 Количество товаров в одном заказе")
+            section("📦 Глубина заказа — кол-во товаров в одном заказе")
             items_p95 = unit_eco['items'].quantile(0.95)
-            fig_items = go.Figure(go.Histogram(x=unit_eco['items'].clip(upper=items_p95), nbinsx=20,
-                                               marker_color='rgba(16,185,129,0.65)', name='Товаров в заказе'))
-            fig_items.update_layout(title="Кол-во товаров в заказе (до P95)")
-            T(fig_items, 300)
+            fig_items = go.Figure(go.Histogram(
+                x=unit_eco['items'].clip(upper=items_p95), nbinsx=20,
+                marker_color='rgba(16,185,129,0.65)', name='Товаров в заказе'
+            ))
+            fig_items.add_vline(x=avg_items, line_dash="dash", line_color="#f59e0b",
+                                annotation_text=f"Среднее {avg_items:.1f} шт.", annotation_font_color="#f59e0b")
+            fig_items.update_layout(title="Кол-во товаров в заказе")
+            T(fig_items, 320)
             st.plotly_chart(fig_items, use_container_width=True)
-            caption("Показывает типичную «глубину» заказа. Если большинство заказов содержат 1 товар — есть потенциал для up-sell и cross-sell (предложения сопутствующих товаров). Рост этого показателя = рост среднего чека без привлечения новых клиентов.")
+            caption("Показывает типичную «глубину» заказа. Если большинство заказов содержат 1 товар — есть потенциал для up-sell (предложить более дорогой аналог) и cross-sell (предложить сопутствующий товар). Увеличение глубины заказа = рост среднего чека без привлечения новых клиентов.")
 
-            section("📈 Еженедельный объём заказов (скорость бизнеса)")
+            section("📈 Еженедельный объём заказов и выручка")
             ord_wk = df.groupby('week')['order_id'].nunique().reset_index()
             ord_wk.columns = ['week','orders']
-            fig_vel = go.Figure(go.Scatter(x=ord_wk['week'], y=ord_wk['orders'], mode='lines+markers',
-                                           fill='tozeroy', line=dict(color='#6366f1'),
-                                           fillcolor='rgba(99,102,241,0.1)'))
-            fig_vel.update_layout(title="Заказов в неделю (Velocity)")
-            T(fig_vel, 300)
+            rev_wk = df.groupby('week')['revenue'].sum().reset_index()
+            rev_wk.columns = ['week','revenue']
+            wk_merged = ord_wk.merge(rev_wk, on='week')
+            wk_merged['aov_week'] = wk_merged['revenue'] / wk_merged['orders']
+
+            fig_vel = go.Figure()
+            fig_vel.add_trace(go.Bar(x=wk_merged['week'], y=wk_merged['revenue'], name='Выручка (₴)',
+                                     marker_color='rgba(99,102,241,0.45)', yaxis='y'))
+            fig_vel.add_trace(go.Scatter(x=wk_merged['week'], y=wk_merged['orders'], name='Заказов',
+                                         mode='lines+markers', line=dict(color='#10b981', width=2), yaxis='y2'))
+            fig_vel.add_trace(go.Scatter(x=wk_merged['week'], y=wk_merged['aov_week'], name='AOV недели (₴)',
+                                         mode='lines', line=dict(color='#f59e0b', width=1.5, dash='dot'), yaxis='y2'))
+            fig_vel.update_layout(
+                title="Еженедельная динамика: выручка, заказы, чек",
+                yaxis=dict(title="Выручка (₴)", gridcolor='rgba(99,102,241,0.08)'),
+                yaxis2=dict(title="Заказов / AOV", overlaying='y', side='right', showgrid=False)
+            )
+            T(fig_vel, 380)
             st.plotly_chart(fig_vel, use_container_width=True)
-            caption("Velocity (скорость) — еженедельное кол-во заказов. Нарастающий тренд = бизнес ускоряется. Плато = стагнация. Резкие провалы = аномалии (технические проблемы, сезонный спад, отключение рекламы).")
+            caption("Комбинированный график: синие столбцы — выручка за неделю (левая шкала), зелёная линия — количество заказов, жёлтая пунктирная — средний чек за неделю (правая шкала). Позволяет одновременно видеть: за счёт чего растёт выручка — большего числа заказов или роста чека.")
+
+            section("📉 Перцентильный анализ чеков — сегментация заказов")
+            pct_labels = ['P10', 'P25', 'P50', 'P75', 'P90', 'P95', 'P99']
+            pct_values = [unit_eco['revenue'].quantile(q/100) for q in [10,25,50,75,90,95,99]]
+            fig_pct = go.Figure(go.Bar(
+                x=pct_labels, y=pct_values,
+                text=[f"₴ {v:,.0f}" for v in pct_values],
+                textposition='outside',
+                textfont=dict(size=12, color='#e2e8f0'),
+                marker=dict(color=pct_values,
+                            colorscale=[[0,'rgba(99,102,241,0.3)'],[1,'rgba(99,102,241,1)']],
+                            showscale=False)
+            ))
+            fig_pct.update_layout(title="Перцентили чеков — как распределены суммы заказов")
+            T(fig_pct, 340)
+            st.plotly_chart(fig_pct, use_container_width=True)
+            caption("Перцентили показывают: P10 = 10% заказов дешевле этой суммы, P50 = медиана (половина дешевле/дороже), P90 = только 10% заказов дороже. Анализ разрыва между P75 и P90 помогает найти ценовой диапазон для апсейла.")
 
             section("⚠️ Метрики финансового риска")
-            p25 = unit_eco['revenue'].quantile(0.25)
-            p75 = unit_eco['revenue'].quantile(0.75)
             r1, r2, r3 = st.columns(3)
             with r1:
                 insight(f"""
                 <strong>VaR 10% — «Выручка под риском»:</strong><br>
                 Value at Risk (VaR) — в 10% худших дней выручка не превысит <strong>₴ {var_10:,.0f}</strong>.<br>
-                Это минимальный резерв ликвидности на 1 неделю: <strong>₴ {int(7*var_10):,}</strong>.<br>
-                <em>Практический смысл:</em> сколько денег нужно держать «на чёрный день» чтобы покрывать операционные расходы в худшие периоды.
+                Минимальный недельный резерв ликвидности: <strong>₴ {int(7*var_10):,}</strong>.<br>
+                <em>Смысл:</em> сколько денег нужно держать «на чёрный день» чтобы покрывать операционные расходы в худшие периоды.
                 """, 'warning', '📉')
             with r2:
                 insight(f"""
-                <strong>IQR — межквартильный диапазон чеков:</strong><br>
-                Межквартильный размах (IQR) = разница между 75-м и 25-м перцентилями.<br>
-                25% заказов: до ₴ {p25:,.0f} | 75% заказов: до ₴ {p75:,.0f}<br>
-                IQR = <strong>₴ {p75-p25:,.0f}</strong>.<br>
-                <em>Практический смысл:</em> чем меньше IQR — тем стабильнее средний чек. Большой IQR = высокая вариативность заказов.
+                <strong>IQR — стабильность чеков:</strong><br>
+                25-й перцентиль: ₴ {p25:,.0f} | 75-й перцентиль: ₴ {p75:,.0f}<br>
+                Межквартильный диапазон IQR = <strong>₴ {iqr:,.0f}</strong>.<br>
+                <em>Смысл:</em> чем меньше IQR — тем стабильнее чеки. Большой IQR = высокая вариативность, AOV сложнее прогнозировать.
                 """, 'default', '📐')
             with r3:
                 insight(f"""
-                <strong>LTV / CAC — золотое правило юнит-экономики:</strong><br>
-                LTV (прокси) = ₴ {ltv_proxy:,.0f} | Макс. CAC = ₴ {max_cac:,.0f}<br>
-                Отношение LTV/CAC должно быть <strong>≥ 3</strong>.<br>
-                При CAC ≤ ₴ {max_cac:,.0f} — бизнес масштабируется прибыльно.<br>
-                <em>Практический смысл:</em> если вы тратите больше на привлечение клиента чем он приносит — масштабирование убыточно.
+                <strong>LTV / CAC — правило масштабирования:</strong><br>
+                LTV (прокси) = ₴ {ltv_proxy:,.0f}<br>
+                Макс. CAC = ₴ {max_cac:,.0f}<br>
+                Коэф. LTV/CAC: <strong>{ltv_proxy/max_cac:.1f}x</strong> (норма ≥ 3x).<br>
+                <em>Смысл:</em> если CAC выше максимума — привлечение клиентов убыточно.
                 """, 'success', '💎')
 
         # ═══════════════════════════
@@ -986,27 +1079,85 @@ if uploaded_file:
                             mdl = genai.GenerativeModel(sel_model)
                             top_city    = city_rev_df.iloc[0]['city'] if not city_rev_df.empty else "N/A"
                             top_channel = df.groupby('utm_source')['revenue'].sum().idxmax() if total_rev > 0 else "N/A"
-                            ctx = {
-                                "выручка_факт": f"₴{total_rev:,.0f}", "выручка_прогноз": f"₴{future_total_rev:,.0f}",
-                                "горизонт_мес": horizon_months, "AOV": f"₴{aov:,.0f}",
-                                "LTV_прокси": f"₴{ltv_proxy:,.0f}", "маржа": f"{gross_margin*100:.0f}%",
-                                "тренд": trend_direction, "изм_тренда_%": f"{change_pct:.1f}%",
-                                "топ_канал": top_channel, "HHI_концентрация": f"{hhi:.2f}",
-                                "топ_город": top_city, "SKU": df['product'].nunique(),
-                                "pareto_pct": f"{p_pct:.0f}%", "VaR_10%": f"₴{var_10:,.0f}",
-                            }
-                            prompt = f"""Ты Chief Financial Officer крупной украинской e-commerce компании, уровень Goldman Sachs / McKinsey.
-Данные: {json.dumps(ctx, ensure_ascii=False)}
+                            top_product = df.groupby('product')['revenue'].sum().idxmax() if total_rev > 0 else "N/A"
 
-Напиши СТРОГИЙ, КОНКРЕТНЫЙ стратегический брифинг для Board of Directors. Структура:
+                            # Помесячные прогнозные данные для AI
+                            monthly_fc_str = ""
+                            if not monthly_forecast_totals.empty:
+                                for _, r in monthly_forecast_totals.iterrows():
+                                    monthly_fc_str += f"  {r['month_str']}: базовый ₴{r['yhat']:,.0f} | оптимист. ₴{r['yhat_upper']:,.0f} | пессимист. ₴{r['yhat_lower']:,.0f}\n"
 
-## EXECUTIVE SUMMARY (3 предложения — ключевые цифры)
-## RED FLAGS — КРИТИЧЕСКИЕ РИСКИ (топ-3, с цифрами)
-## FINANCIAL HEALTH ASSESSMENT (P&L, ликвидность, устойчивость)
-## STRATEGIC RECOMMENDATIONS (5 конкретных действий с ROI-потенциалом)
-## OUTLOOK (реалистичность прогнозных цифр)
+                            # Топ-3 канала
+                            ch_top = df.groupby('utm_source')['revenue'].sum().sort_values(ascending=False).head(3)
+                            ch_str = " | ".join([f"{k}: ₴{v:,.0f} ({v/total_rev*100:.1f}%)" for k,v in ch_top.items()])
 
-Тон: прямой, без воды. Стиль: совет директоров Нью-Йорка. Конкретные цифры из данных."""
+                            # Топ-3 города
+                            city_top = city_rev_df.head(3)
+                            city_str = " | ".join([f"{r['city']}: ₴{r['revenue']:,.0f}" for _,r in city_top.iterrows()])
+
+                            # Динамика MoM
+                            velocity_local = compute_velocity(df)
+                            mom_str = ""
+                            for _, r in velocity_local.tail(4).iterrows():
+                                mom_str += f"  {r['year_month']}: ₴{r['revenue']:,.0f} (MoM {r['mom_growth']:+.1f}%)\n" if not pd.isna(r['mom_growth']) else f"  {r['year_month']}: ₴{r['revenue']:,.0f}\n"
+
+                            ctx_text = f"""
+=== ИСТОРИЧЕСКИЕ ДАННЫЕ ===
+Период анализа: {df['date'].min().strftime('%d.%m.%Y')} — {df['date'].max().strftime('%d.%m.%Y')} ({days_total} дней)
+Общая выручка (факт): ₴{total_rev:,.0f}
+Всего заказов: {unique_orders:,}
+Средний чек (AOV): ₴{aov:,.0f}
+Медианный чек: ₴{unit_eco['revenue'].median():,.0f}
+LTV-прокси: ₴{ltv_proxy:,.0f}
+Макс. допустимый CAC: ₴{max_cac:,.0f}
+Активных SKU: {df['product'].nunique()}
+Топ товар: {top_product}
+
+=== ДИНАМИКА MoM (последние 4 месяца) ===
+{mom_str}
+
+=== МАРКЕТИНГОВЫЕ КАНАЛЫ (топ-3) ===
+{ch_str}
+Индекс концентрации HHI: {hhi:.2f} (норма <0.25, риск >0.5)
+
+=== РЕГИОНЫ (топ-3) ===
+{city_str}
+
+=== ПРОГНОЗ PROPHET НА {horizon_months} МЕС. ===
+Тренд: {trend_direction} (отклонение среднесуточных продаж: {change_pct:+.1f}%)
+Базовый итог за период: ₴{future_total_rev:,.0f}
+Оптимистичный: ₴{future_total_upper:,.0f}
+Пессимистичный: ₴{future_total_lower:,.0f}
+Помесячная разбивка:
+{monthly_fc_str}
+
+=== РИСКИ ===
+VaR (10% худших дней): ₴{var_10:,.0f}/день
+Парето: {p_cnt} из {p_tot} SKU ({p_pct:.0f}%) = 80% выручки
+"""
+                            prompt = f"""Ты Chief Financial Officer крупной украинской e-commerce компании. Уровень Goldman Sachs / McKinsey. Говоришь жёстко, конкретно, с цифрами.
+
+ДАННЫЕ ПЛАТФОРМЫ:
+{ctx_text}
+
+Напиши стратегический брифинг для Board of Directors. Используй ТОЛЬКО цифры из данных выше:
+
+## EXECUTIVE SUMMARY
+3 предложения. Факт, тренд, прогноз — только цифры.
+
+## RED FLAGS — КРИТИЧЕСКИЕ РИСКИ
+Ровно 3 риска. Каждый с конкретной цифрой из данных. Что произойдёт если не устранить.
+
+## ФИНАНСОВАЯ ДИАГНОСТИКА
+Оценка: динамика выручки, стабильность чека, концентрация каналов, региональная структура. По каждому пункту — вывод и цифра.
+
+## СТРАТЕГИЧЕСКИЕ РЕКОМЕНДАЦИИ
+5 конкретных действий. Для каждого: что делать, ожидаемый результат в % или ₴, срок.
+
+## ПРОГНОЗ — СЦЕНАРНЫЙ АНАЛИЗ
+Оцени реалистичность каждого сценария (пессимист/база/оптимист) исходя из исторической динамики MoM. Назови вероятный сценарий.
+
+Тон: совет директоров Нью-Йорка. Без воды. Прямо."""
                             resp = mdl.generate_content(prompt)
                             st.session_state['ai_cfo'] = resp.text
                             st.markdown(resp.text)
@@ -1032,19 +1183,62 @@ if uploaded_file:
                         try:
                             genai.configure(api_key=api_key)
                             mdl = genai.GenerativeModel(sel_model)
-                            top_ch = df.groupby('utm_source')['revenue'].sum().sort_values(ascending=False)
-                            prompt = f"""Ты Chief Marketing Officer e-commerce компании (уровень Shopify / Rozetka).
-Данные: выручка ₴{total_rev:,.0f}, прогноз {horizon_months} мес. ₴{future_total_rev:,.0f}, AOV ₴{aov:,.0f}, LTV ₴{ltv_proxy:,.0f}, топ-канал: {top_ch.index[0] if len(top_ch)>0 else 'N/A'}, HHI: {hhi:.2f}, SKU: {df['product'].nunique()}.
 
-Напиши КОНКРЕТНЫЙ 90-ДНЕВНЫЙ ПЛАН РОСТА:
+                            ch_all = df.groupby('utm_source')['revenue'].sum().sort_values(ascending=False)
+                            ch_str_full = "\n".join([f"  {k}: ₴{v:,.0f} ({v/total_rev*100:.1f}%)" for k,v in ch_all.items()])
 
-## QUICK WINS (0-30 дней) — 5 действий с прогнозируемым uplift %
-## GROWTH ENGINE (30-60 дней) — масштабирование каналов, рост AOV
-## SCALE (60-90 дней) — новые каналы, retention, ассортимент
-## MARKETING MIX — перераспределение бюджета по каналам (%)
-## KPI DASHBOARD — 10 метрик для еженедельного мониторинга
+                            top5_prod = df.groupby('product')['revenue'].sum().sort_values(ascending=False).head(5)
+                            prod_str = "\n".join([f"  {k}: ₴{v:,.0f}" for k,v in top5_prod.items()])
 
-Конкретно, с цифрами, без воды. Стиль: операционный директор Нью-Йорской компании."""
+                            monthly_fc_str2 = ""
+                            if not monthly_forecast_totals.empty:
+                                for _, r in monthly_forecast_totals.iterrows():
+                                    monthly_fc_str2 += f"  {r['month_str']}: ₴{r['yhat']:,.0f} (база)\n"
+
+                            velocity_local2 = compute_velocity(df)
+                            last_mom = velocity_local2['mom_growth'].dropna().tail(3).mean()
+
+                            ctx_cmo = f"""
+БИЗНЕС: e-commerce, Украина
+ПЕРИОД: {df['date'].min().strftime('%d.%m.%Y')} — {df['date'].max().strftime('%d.%m.%Y')}
+ВЫРУЧКА ФАКТ: ₴{total_rev:,.0f} | ЗАКАЗОВ: {unique_orders:,} | AOV: ₴{aov:,.0f}
+СРЕДНИЙ MoM РОСТ (3 мес.): {last_mom:+.1f}%
+LTV-прокси: ₴{ltv_proxy:,.0f} | Макс. CAC: ₴{max_cac:,.0f}
+АКТИВНЫХ SKU: {df['product'].nunique()} | Парето (80% выручки): {p_cnt} SKU ({p_pct:.0f}%)
+HHI концентрации каналов: {hhi:.2f}
+
+КАНАЛЫ ТРАФИКА:
+{ch_str_full}
+
+ТОП-5 ТОВАРОВ:
+{prod_str}
+
+ПРОГНОЗ НА {horizon_months} МЕС.:
+{monthly_fc_str2}Итог: ₴{future_total_rev:,.0f} (база) / ₴{future_total_upper:,.0f} (оптимист.)
+"""
+                            prompt = f"""Ты Chief Marketing Officer e-commerce компании. Уровень Shopify / Rozetka / Allegro. Мыслишь цифрами, действуешь быстро.
+
+ДАННЫЕ:
+{ctx_cmo}
+
+Разработай 90-ДНЕВНЫЙ ПЛАН РОСТА. Каждый пункт — конкретное действие, конкретная цифра, конкретный срок:
+
+## QUICK WINS (0-30 дней)
+5 действий которые дадут результат в течение месяца. Для каждого: что делать → ожидаемый uplift в % или ₴.
+
+## GROWTH ENGINE (31-60 дней)
+Масштабирование работающих каналов. Стратегии увеличения AOV (рост среднего чека без новых клиентов). Цифры по каждому каналу.
+
+## SCALE & RETENTION (61-90 дней)
+Новые каналы под конкретный бюджет. Программа повторных покупок (как поднять LTV). Ассортиментные решения по ABC-классам.
+
+## MARKETING MIX — РЕКОМЕНДУЕМОЕ РАСПРЕДЕЛЕНИЕ БЮДЖЕТА
+Таблицей: канал | текущая доля % | рекомендуемая доля % | обоснование.
+
+## НЕДЕЛЬНЫЙ KPI ДАШБОРД
+10 метрик для еженедельного отслеживания. Для каждой: название, формула/источник, целевое значение.
+
+Тон: операционный директор, без маркетингового буллшита. Только то что реально работает."""
                             resp = mdl.generate_content(prompt)
                             st.session_state['ai_plan'] = resp.text
                             st.markdown(resp.text)
