@@ -738,26 +738,39 @@ if uploaded_file:
 
             channel_rev = df.groupby('utm_source')['revenue'].sum().sort_values(ascending=False)
 
-            section("📊 Выручка по источникам трафика")
-            ch_count = len(channel_rev)
-            bar_h = max(380, ch_count * 52)
+            section("📊 Выручка по источникам трафика — ТОП-10")
+            ch_top10  = channel_rev.head(10)
+            ch_rest   = channel_rev.iloc[10:]
+            bar_h_10  = max(340, len(ch_top10) * 50)
             fig_ch = go.Figure(go.Bar(
-                y=channel_rev.index,
-                x=channel_rev.values,
+                y=ch_top10.index,
+                x=ch_top10.values,
                 orientation='h',
-                text=[f"₴ {v:,.0f}  ({v/total_rev*100:.1f}%)" for v in channel_rev.values],
+                text=[f"₴ {v:,.0f}   ({v/total_rev*100:.1f}%)" for v in ch_top10.values],
                 textposition='outside',
                 textfont=dict(size=13, color='#e2e8f0'),
                 marker=dict(
-                    color=list(range(len(channel_rev))),
-                    colorscale=[[0,'rgba(99,102,241,0.4)'],[1,'rgba(99,102,241,1)']],
+                    color=list(range(len(ch_top10))),
+                    colorscale=[[0,'rgba(99,102,241,0.35)'],[1,'rgba(99,102,241,1)']],
                     showscale=False
                 )
             ))
-            fig_ch.update_layout(title="Выручка по каналам трафика (₴)", xaxis=dict(showticklabels=False))
-            T(fig_ch, bar_h)
+            fig_ch.update_layout(title="ТОП-10 источников трафика по выручке (₴)",
+                                 xaxis=dict(showticklabels=False),
+                                 yaxis=dict(autorange='reversed'))
+            T(fig_ch, bar_h_10)
             st.plotly_chart(fig_ch, use_container_width=True)
-            caption("Горизонтальный барчарт: каждая строка — один источник трафика (UTM Source). Длина полосы = сумма выручки за весь период. Над полосой указаны абсолютная сумма и доля в % от общей выручки.")
+            caption("ТОП-10 источников трафика по суммарной выручке. Каждая строка — UTM Source. Рядом с полосой — точная сумма и доля в общей выручке. Сортировка: лучший канал сверху.")
+
+            if len(ch_rest) > 0:
+                with st.expander(f"📋 Показать остальные {len(ch_rest)} каналов (суммарно ₴ {ch_rest.sum():,.0f} / {ch_rest.sum()/total_rev*100:.1f}%)"):
+                    rest_df = ch_rest.reset_index()
+                    rest_df.columns = ['Источник', 'Выручка (₴)']
+                    rest_df['Доля %'] = rest_df['Выручка (₴)'] / total_rev * 100
+                    st.dataframe(
+                        rest_df.style.format({'Выручка (₴)': '{:,.0f}', 'Доля %': '{:.2f}%'}),
+                        use_container_width=True, hide_index=True
+                    )
 
             section("🌐 Структура доходов по UTM-цепочке (источник → канал → кампания)")
             fig_sun = px.sunburst(
@@ -1022,21 +1035,105 @@ if uploaded_file:
             caption("Комбинированный график: синие столбцы — выручка за неделю (левая шкала), зелёная линия — количество заказов, жёлтая пунктирная — средний чек за неделю (правая шкала). Позволяет одновременно видеть: за счёт чего растёт выручка — большего числа заказов или роста чека.")
 
             section("📉 Перцентильный анализ чеков — сегментация заказов")
-            pct_labels = ['P10', 'P25', 'P50', 'P75', 'P90', 'P95', 'P99']
-            pct_values = [unit_eco['revenue'].quantile(q/100) for q in [10,25,50,75,90,95,99]]
+            pct_labels = ['P10', 'P25', 'P50\n(медиана)', 'P75', 'P90', 'P95', 'P99']
+            pct_qs     = [10, 25, 50, 75, 90, 95, 99]
+            pct_values = [unit_eco['revenue'].quantile(q/100) for q in pct_qs]
+            p10v, p25v, p50v, p75v, p90v, p95v, p99v = pct_values
+
             fig_pct = go.Figure(go.Bar(
                 x=pct_labels, y=pct_values,
                 text=[f"₴ {v:,.0f}" for v in pct_values],
                 textposition='outside',
                 textfont=dict(size=12, color='#e2e8f0'),
-                marker=dict(color=pct_values,
-                            colorscale=[[0,'rgba(99,102,241,0.3)'],[1,'rgba(99,102,241,1)']],
-                            showscale=False)
+                marker=dict(
+                    color=pct_values,
+                    colorscale=[[0,'rgba(99,102,241,0.3)'],[1,'rgba(99,102,241,1)']],
+                    showscale=False
+                )
             ))
-            fig_pct.update_layout(title="Перцентили чеков — как распределены суммы заказов")
-            T(fig_pct, 340)
+            # Линия AOV для сравнения
+            fig_pct.add_hline(y=aov, line_dash="dash", line_color="#f59e0b",
+                              annotation_text=f"AOV ₴{aov:,.0f}", annotation_font_color="#f59e0b",
+                              annotation_position="top right")
+            fig_pct.update_layout(title="Перцентили суммы заказов — где концентрируется ваш доход")
+            T(fig_pct, 360)
             st.plotly_chart(fig_pct, use_container_width=True)
-            caption("Перцентили показывают: P10 = 10% заказов дешевле этой суммы, P50 = медиана (половина дешевле/дороже), P90 = только 10% заказов дороже. Анализ разрыва между P75 и P90 помогает найти ценовой диапазон для апсейла.")
+            caption("Каждый столбец = пороговая сумма заказа для данного процента аудитории. P50 (медиана) — половина заказов ниже этой суммы. P90 — только 10% заказов дороже. Жёлтая линия — средний чек (AOV). Если AOV сильно выше медианы — крупные заказы завышают среднее.")
+
+            # ── Авторекомендации по перцентилям
+            section("🎯 Авторекомендации на основе перцентильного анализа")
+
+            # Разрыв P75-P90: потенциал апсейла
+            upsell_gap   = p90v - p75v
+            upsell_share = len(unit_eco[unit_eco['revenue'] >= p75v]) / len(unit_eco) * 100
+            # Доля «тяжёлых» заказов (>P90)
+            heavy_share  = len(unit_eco[unit_eco['revenue'] >= p90v]) / len(unit_eco) * 100
+            heavy_rev    = unit_eco[unit_eco['revenue'] >= p90v]['revenue'].sum()
+            heavy_rev_pct = heavy_rev / total_rev * 100
+            # Доля «лёгких» заказов (<P25)
+            light_share  = len(unit_eco[unit_eco['revenue'] < p25v]) / len(unit_eco) * 100
+            light_rev    = unit_eco[unit_eco['revenue'] < p25v]['revenue'].sum()
+            # Разрыв AOV vs медиана
+            aov_vs_med   = (aov - p50v) / p50v * 100 if p50v > 0 else 0
+
+            ra1, ra2 = st.columns(2)
+            with ra1:
+                # Апсейл-потенциал
+                if upsell_gap > aov * 0.3:
+                    insight(
+                        f"<strong>🔼 Апсейл-потенциал: высокий.</strong> Разрыв между P75 (₴ {p75v:,.0f}) и P90 (₴ {p90v:,.0f}) = <strong>₴ {upsell_gap:,.0f}</strong>. "
+                        f"Это зона «следующего шага»: {upsell_share:.0f}% заказов уже в диапазоне P75+. "
+                        f"Рекомендация: запустить пакетные предложения и бандлы в диапазоне ₴ {p75v:,.0f}–{p90v:,.0f} — "
+                        f"конвертация даже 5% заказов из P50 в P75 даст +₴ {len(unit_eco)*0.05*(p75v-p50v):,.0f} к выручке.",
+                        'success', '🔼'
+                    )
+                else:
+                    insight(
+                        f"<strong>🔼 Апсейл-потенциал: умеренный.</strong> Разрыв P75–P90 = ₴ {upsell_gap:,.0f} (менее 30% от AOV). "
+                        f"Чеки в верхней части распределения относительно плотные. "
+                        f"Фокус: увеличить частоту повторных заказов (LTV) важнее, чем поднимать сумму разового заказа.",
+                        'default', '🔼'
+                    )
+
+                # «Тяжёлые» заказы
+                insight(
+                    f"<strong>💎 VIP-сегмент (заказы выше P90 — ₴ {p90v:,.0f}+):</strong> "
+                    f"таких заказов <strong>{heavy_share:.1f}%</strong> от общего числа, но они генерируют "
+                    f"<strong>₴ {heavy_rev:,.0f} ({heavy_rev_pct:.1f}%)</strong> всей выручки. "
+                    f"Рекомендация: выделить этих клиентов в отдельный сегмент, запустить персональные предложения, "
+                    f"приоритетный сервис и программу лояльности — удержание каждого VIP-клиента критично.",
+                    'success', '💎'
+                )
+
+            with ra2:
+                # AOV vs медиана
+                if aov_vs_med > 20:
+                    insight(
+                        f"<strong>⚠️ AOV завышен крупными выбросами.</strong> Средний чек (₴ {aov:,.0f}) на <strong>{aov_vs_med:.0f}%</strong> "
+                        f"выше медианы (₴ {p50v:,.0f}). Это означает: типичный клиент тратит ₴ {p50v:,.0f}, "
+                        f"а AOV «тянут» вверх единичные крупные заказы. "
+                        f"Рекомендация: для планирования закупок и прогнозов использовать медиану ₴ {p50v:,.0f} как более реалистичный ориентир.",
+                        'warning', '⚠️'
+                    )
+                else:
+                    insight(
+                        f"<strong>✅ AOV близок к медиане.</strong> Средний чек (₴ {aov:,.0f}) отличается от медианы (₴ {p50v:,.0f}) "
+                        f"лишь на {aov_vs_med:.0f}% — распределение чеков равномерное, без сильных выбросов. "
+                        f"AOV является надёжным показателем для планирования и прогнозирования.",
+                        'success', '✅'
+                    )
+
+                # «Лёгкие» заказы
+                light_uplift = len(unit_eco[unit_eco['revenue'] < p25v]) * (p50v - p25v)
+                insight(
+                    f"<strong>📦 Мелкие заказы (ниже P25 — до ₴ {p25v:,.0f}):</strong> "
+                    f"<strong>{light_share:.1f}%</strong> всех заказов, суммарно ₴ {light_rev:,.0f} "
+                    f"({light_rev/total_rev*100:.1f}% выручки). "
+                    f"Рекомендация: ввести бесплатную доставку от ₴ {p50v:,.0f} — стимулирует докладывать товары в корзину. "
+                    f"Если {light_share:.0f}% мелких заказов дорастут до медианы, прирост выручки составит "
+                    f"~₴ {light_uplift:,.0f}.",
+                    'warning', '📦'
+                )
 
             section("⚠️ Метрики финансового риска")
             r1, r2, r3 = st.columns(3)
